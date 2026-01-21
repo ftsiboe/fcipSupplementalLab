@@ -12,8 +12,9 @@ unlink(c(
 if(toupper(as.character(Sys.info()[["sysname"]])) %in% "WINDOWS"){
   source( file.path(dirname(dirname(getwd())),"codeLibrary.R"))
   list_function <- c(
-    file.path(codeLibrary,"miscellaneous/build_internal_datasets.R"),
-    file.path(codeLibrary,"github_tools/install_from_private_repo.R"),
+    #file.path(codeLibrary,"miscellaneous/build_internal_datasets.R"),
+    #file.path(codeLibrary,"github_tools/install_from_private_repo.R"),
+    file.path(codeLibrary,"github_tools/get_study_releases.R"),
     file.path(codeLibrary,"plot/ers_theme.R"),
     paste0(file.path(codeLibrary,"fcip//"),
            c("get_fcip_agents.R",
@@ -30,6 +31,9 @@ for(i in c("setup_environment")){
     paste0("https://raw.githubusercontent.com/ftsiboe/USFarmSafetyNetLab/refs/heads/main/R/",i,".R"),
     paste0("./R/",i,".R"), mode = "wb", quiet = TRUE)
 }
+
+# unlink(c("R/build_internal_datasets.R"))
+
 
 # Sanity pass through R/ sources: shows any non-ASCII characters per file
 for (i in list.files("R", full.names = TRUE)) {
