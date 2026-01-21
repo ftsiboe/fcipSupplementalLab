@@ -1,0 +1,28 @@
+Package: fcipSupplementalLab
+Type: Package
+Title: Research Framework for Supplemental Crop Insurance in the FCIP
+Version: 0.0.0.9000
+Author: Francis Tsiboe [aut, cre] (<https://orcid.org/0000-0001-5984-1072>)
+Maintainer: Francis Tsiboe <ftsiboe@hotmail.com>
+Creator: Francis Tsiboe
+Description: Provides a research framework for analyzing supplemental crop insurance
+    products in the United States Federal Crop Insurance Program (FCIP). The
+    package supports reproducible workflows to evaluate adoption and demand,
+    actuarial performance and program soundness, 
+    fiscal exposure, risk reduction and income transfer, and basis risk and
+    coverage quality. Functions emphasize transparent data preparation,
+    diagnostic summaries, and modular analysis components suitable for reports
+    and policy briefs.
+License: GPL-3 + file LICENSE
+URL: https://github.com/ftsiboe/fcipSupplementalLab
+BugReports: https://github.com/ftsiboe/fcipSupplementalLab/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+VignetteBuilder: knitr
+Depends: R (>= 4.1.0)
+Imports: data.table, rfcip,stringr, urbnmapr, matrixStats, ggplot2, devtools
+Remotes: github::dylan-turner25/rfcip, github::UrbanInstitute/urbnmapr, github::dylan-turner25/rfsa
+Suggests: dplyr, tidyr, knitr, rmarkdown, mockery,  withr, testthat (>= 3.0.0), piggyback, purrr, readr
+LazyData: true
+
