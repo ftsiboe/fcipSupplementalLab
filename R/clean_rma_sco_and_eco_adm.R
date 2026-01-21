@@ -35,14 +35,20 @@ clean_rma_sco_and_eco_adm <- function(year){
           # plan <- "Supplemental_sco"  # ad-hoc debugging
 
           # Download the yearly release artifact for this plan family to a temp .rds file
-          adm <- tempfile(fileext = ".rds")
-          download.file(
-            paste0("https://github.com/ftsiboe/USFarmSafetyNetLab/releases/download/adm_compressed/",
-                   year,"_",plan,"_plans_adm.rds"),
-            adm, mode = "wb", quiet = TRUE)
+
+          temporary_dir <- tempdir()
+
+          compressed_adm_dataset <- paste0(year,"_",plan,"_plans_adm.rds")
+
+          piggyback::pb_download(
+            file = compressed_adm_dataset,
+            dest = temporary_dir,
+            repo = "ftsiboe/rfcipCalcPass",
+            tag  = "adm_compressed",
+            overwrite = TRUE)
 
           # Read ADM into memory
-          adm <- readRDS(adm)
+          adm <- readRDS(file.path(temporary_dir,compressed_adm_dataset))
 
           # Numeric ADM parameters to summarize at aggregation points
           parameter_list <-  names(adm)[

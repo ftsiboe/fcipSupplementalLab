@@ -4,40 +4,51 @@
 \alias{build_supplemental_offering_and_adoption}
 \title{Build panel of supplemental insurance availability (offering) and adoption (acres)}
 \usage{
-build_supplemental_offering_and_adoption(
-  cleaned_rma_sobtpu_file_path = "data/cleaned_rma_sobtpu.rds",
-  output_directory = "data"
-)
+build_supplemental_offering_and_adoption(sob)
 }
 \arguments{
-\item{cleaned_rma_sobtpu_file_path}{Character. Path to cleaned RMA SOB/TPU RDS.
-Default: "data/cleaned_rma_sobtpu.rds".}
-
-\item{output_directory}{Character. Directory to save output RDS; created if missing.
-Default: "data".}
+\item{sob}{data.frame or data.table. Cleaned SOB/TPU-like micro data containing
+at least \code{commodity_year}, \code{state_code}, \code{county_code}, \code{commodity_code},
+\code{insured_acres}, and indicator columns \code{sco}, \code{eco90}, \code{eco95} (typically 0/1).}
 }
 \value{
-Invisibly returns the output file path. Also prints a brief summary.
+A \code{data.table} with one row per
+\verb{(commodity_year, state_code, county_code, commodity_code)} containing:
+\itemize{
+\item Keys: \code{commodity_year}, \code{state_code}, \code{county_code}, \code{commodity_code}
+\item Convenience: \code{county_fips} (character, 5-digit FIPS)
+\item Availability flags: \code{avail_aph}, \code{avail_sco}, \code{avail_eco90}, \code{avail_eco95} (0/1)
+\item Adoption acres: \code{insured_acres}, \code{sco}, \code{eco90}, \code{eco95}
+}
 }
 \description{
-Creates a county-year-commodity panel with availability flags for APH/SCO/ECO90/ECO95
-and adoption/acreage measures from RMA SOB/TPU. Availability is sourced from the
-RMA ADM (A00030_InsuranceOffer). ECO availability applies starting in 2021.
+Builds a county-year-commodity panel that combines:
+(i) availability flags for APH, SCO, and ECO (ECO90/ECO95), sourced from the
+RMA ADM dataset \code{A00030_InsuranceOffer}, and
+(ii) adoption/acreage measures computed from cleaned RMA SOB/TPU records.
 }
 \details{
-Output columns:
-\itemize{
-\item commodity_year, state_code, county_code, commodity_code, county_fips
-\item avail_aph, avail_sco, avail_eco90, avail_eco95 (0/1 flags)
-\item insured_acres, sco, eco90, eco95 (adopted acres)
-}
+The function aggregates SOB/TPU records to county-year-commodity totals, then
+constructs a full county shell using \code{urbnmapr} and merges in ADM availability
+and SOB/TPU adoption. ECO availability is only populated for years >= 2021.
+Missing availability flags and acreage measures are replaced with 0.
 
-Availability aggregation uses max() (binary). Acreage aggregation uses sum().
-Missing numeric values are replaced with 0.
+\strong{Adoption acres (SOB/TPU)}:
+\code{sco}, \code{eco90}, and \code{eco95} are converted to adopted acres by multiplying each
+indicator by \code{insured_acres}, then summing within
+\verb{(commodity_year, state_code, county_code, commodity_code)} for years >= 2015.
+
+\strong{Availability (ADM)}:
+Availability is derived from \code{A00030_InsuranceOffer} by insurance plan code:
+\itemize{
+\item APH/Yield plan family: 1, 2, 3, 90 -> \code{avail_aph}
+\item SCO endorsements: 31--33 -> \code{avail_sco}
+\item ECO endorsements: 87--89 -> \code{avail_eco90} and \code{avail_eco95} (years >= 2021 only)
 }
-\examples{
-\dontrun{
-  path <- build_supplemental_offering_and_adoption()
-  readRDS(path)[1:5]
-}
+Availability is aggregated to binary flags (max).
+
+\strong{County shell}:
+The output includes all U.S. counties (from \code{urbnmapr}) crossed with all
+\verb{(commodity_year, commodity_code)} pairs present in the ADM availability table.
+Counties with no offering or no adoption for a given key will have zeros.
 }

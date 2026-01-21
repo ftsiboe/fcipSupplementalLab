@@ -15,8 +15,11 @@ if(toupper(as.character(Sys.info()[["sysname"]])) %in% "WINDOWS"){
     file.path(codeLibrary,"miscellaneous/build_internal_datasets.R"),
     file.path(codeLibrary,"github_tools/install_from_private_repo.R"),
     file.path(codeLibrary,"plot/ers_theme.R"),
-    file.path(codeLibrary,"fcip/clean_supplemental_plan_shares.R"),
-    file.path(codeLibrary,"fcip/clean_rma_sobtpu.R")
+    paste0(file.path(codeLibrary,"fcip//"),
+           c("get_fcip_agents.R",
+             "clean_supplemental_plan_shares.R",
+             "clean_rma_sobtpu.R",
+             "build_supplemental_offering_and_adoption.R"))
   )
   file.copy(from= list_function, to = "R/", overwrite = TRUE, recursive = FALSE, copy.mode = TRUE)
 }

@@ -21,9 +21,6 @@
 #' @note This function is intended for use in CI environments and should not be called during package loading.
 #' Ensure the secret specified by \code{secret_name} is configured in your GitHub repository settings.
 #'
-#' @importFrom utils install.packages
-#' @importFrom devtools install_github
-#'
 #' @return NULL. Called for its side effect of installing a package.
 #' @export
 install_from_private_repo <- function(user_name, package_name, secret_name) {
