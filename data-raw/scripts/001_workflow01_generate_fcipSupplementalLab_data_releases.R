@@ -90,6 +90,8 @@ study_environment <- setup_environment(
     file.path(directory_data)              # serialized data outputs
   ))
 
+study_environment$data_date <- Sys.Date()
+
 # Persist the study_environment so later script sections can reload after cleanup.
 saveRDS(study_environment,file = file.path(directory_data,"study_environment.rds"))
 

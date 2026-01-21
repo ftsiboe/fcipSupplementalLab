@@ -52,181 +52,125 @@ build_supplemental_offering_and_adoption <- function(sob) {
 
   sob <- data.table::as.data.table(sob)
 
+  sob <- as.data.table(sob)
   req_cols <- c("commodity_year","state_code","county_code","commodity_code",
                 "insured_acres","sco","eco90","eco95")
   missing_cols <- setdiff(req_cols, names(sob))
   if (length(missing_cols)) {
-    stop("SOB/TPU data missing required columns: ",
+    stop("SOB/TPU file missing required columns: ",
          paste(missing_cols, collapse = ", "))
   }
-
-  # ------------------------------------------------------------------
-  # 1) SOB/TPU: coerce indicators to 0/1, compute adopted acres, aggregate
-  # ------------------------------------------------------------------
-  sob[, insured_acres := suppressWarnings(as.numeric(insured_acres))]
-
-  # defensively coerce endorsements to 0/1 (treat NA/non-1 as 0)
-  sob[, sco  := as.integer(suppressWarnings(as.numeric(sco))  %in% 1)]
-  sob[, eco90:= as.integer(suppressWarnings(as.numeric(eco90))%in% 1)]
-  sob[, eco95:= as.integer(suppressWarnings(as.numeric(eco95))%in% 1)]
-
-  sob[, sco   := insured_acres * sco]
-  sob[, eco90 := insured_acres * eco90]
-  sob[, eco95 := insured_acres * eco95]
-
-  sob <- sob[
-    commodity_year >= 2015,
-    .(
-      insured_acres = sum(insured_acres, na.rm = TRUE),
-      sco           = sum(sco,           na.rm = TRUE),
-      eco90         = sum(eco90,         na.rm = TRUE),
-      eco95         = sum(eco95,         na.rm = TRUE)
-    ),
-    by = .(commodity_year, state_code, county_code, commodity_code)
-  ]
-
-  # ------------------------------------------------------------------
-  # 2) ADM availability by year (A00030_InsuranceOffer)
-  # ------------------------------------------------------------------
-  PLAN_APH <- c(1L, 2L, 3L, 90L)   # APH/Yield plan families
-  PLAN_SCO <- 31L:33L             # SCO endorsements
-  PLAN_ECO <- 87L:89L             # ECO endorsements family
-
+  
+  # ---- SOB/TPU: compute adoption acres & aggregate --------------------------
+  sob[, sco   := as.numeric(insured_acres) * as.numeric(sco)]
+  sob[, eco90 := as.numeric(insured_acres) * as.numeric(eco90)]
+  sob[, eco95 := as.numeric(insured_acres) * as.numeric(eco95)]
+  
+  sob <- sob[commodity_year >= 2015,
+             .(insured_acres = sum(insured_acres, na.rm = TRUE),
+               sco           = sum(sco,           na.rm = TRUE),
+               eco90         = sum(eco90,         na.rm = TRUE),
+               eco95         = sum(eco95,         na.rm = TRUE)),
+             by = .(commodity_year, state_code, county_code, commodity_code)]
+  
+  # ---- ADM availability by year ---------------------------------------------
+  PLAN_APH <- c(1L, 2L, 3L, 90L)     # APH/Yield plan families
+  PLAN_SCO <- 31L:33L                # SCO endorsements
+  PLAN_ECO <- 87L:89L                # ECO endorsements (ECO90/ECO95 both from 87:89 family)
+  
   years <- sort(unique(sob$commodity_year))
-
   adm_list <- lapply(years, function(y) {
-
-    dt <- data.table::as.data.table(rfcip::get_adm_data(y, dataset = "A00030_InsuranceOffer"))
-
-    # Robustly map year column to commodity_year if needed
-    # Required columns for availability
-    need <- c("commodity_year","state_code","county_code","commodity_code","insurance_plan_code")
-    miss <- setdiff(need, names(dt))
-    if (length(miss)) stop("ADM A00030_InsuranceOffer missing columns: ", paste(miss, collapse = ", "))
-
-    # Coerce types
-    dt[, (need) := lapply(.SD, function(x) suppressWarnings(as.integer(as.character(x)))),
-       .SDcols = need]
-
+    dt <- as.data.table(rfcip::get_adm_data(y, dataset = "A00030_InsuranceOffer"))
+    # coerce types we'll use
+    cols <- c("commodity_year","state_code","county_code","commodity_code","insurance_plan_code")
+    dt[, (cols) := lapply(.SD, function(x) as.numeric(as.character(x))), .SDcols = cols]
     dt <- dt[insurance_plan_code %in% c(PLAN_APH, PLAN_SCO, PLAN_ECO)]
-
+    
+    # per spec: ECO exists 2021+
     out <- rbind(
       dt[insurance_plan_code %in% PLAN_APH,
-         .(plan = "avail_aph",  avail = 1L),
+         .(plan = "avail_aph", avail = 1L),
          by = .(commodity_year, state_code, county_code, commodity_code)],
       dt[insurance_plan_code %in% PLAN_SCO,
-         .(plan = "avail_sco",  avail = 1L),
+         .(plan = "avail_sco", avail = 1L),
          by = .(commodity_year, state_code, county_code, commodity_code)]
     )
-
-    # ECO exists 2021+
+    
     if (y >= 2021) {
       eco <- dt[insurance_plan_code %in% PLAN_ECO,
                 .(commodity_year, state_code, county_code, commodity_code)]
       if (nrow(eco)) {
-        eco <- unique(eco)
-        # If A00030 doesn't distinguish 90 vs 95, both are marked available.
         eco[, `:=`(avail_eco90 = 1L, avail_eco95 = 1L)]
-        eco_long <- data.table::melt(
-          eco,
-          id.vars = c("commodity_year","state_code","county_code","commodity_code"),
-          variable.name = "plan",
-          value.name = "avail"
-        )
+        eco <- unique(eco)
+        eco_long <- melt(eco,
+                         id.vars = c("commodity_year","state_code","county_code","commodity_code"),
+                         variable.name = "plan", value.name = "avail")
+        eco_long[, plan := as.character(plan)]
         out <- rbind(out, eco_long, fill = TRUE)
       }
     }
-
-    # Cast to wide; collapse by max -> binary flags
-    out <- data.table::dcast(
-      out,
-      commodity_year + state_code + county_code + commodity_code ~ plan,
-      value.var = "avail",
-      fun.aggregate = function(z) as.integer(max(z %in% 1L))
-    )
-
+    # cast to wide, then collapse by max()
+    out <- dcast(out,
+                 commodity_year + state_code + county_code + commodity_code ~ plan,
+                 value.var = "avail",
+                 fun.aggregate = function(z) as.integer(max(z %in% 1)))
     out[]
   })
-
-  adm <- data.table::rbindlist(adm_list, fill = TRUE)
-
-  # Ensure flag columns exist and are 0/1
+  adm <- rbindlist(adm_list, fill = TRUE)
+  
+  # Ensure flag columns exist
   for (nm in c("avail_aph","avail_sco","avail_eco90","avail_eco95")) {
     if (!nm %in% names(adm)) adm[, (nm) := 0L]
     adm[is.na(get(nm)), (nm) := 0L]
-    adm[, (nm) := as.integer(get(nm) %in% 1L)]
   }
-
-  # ------------------------------------------------------------------
-  # 3) County shell (robust FIPS extraction) and cartesian product
-  # ------------------------------------------------------------------
+  
+  # ---- Build county shell (from urbnmapr) -----------------------------------
   counties <- urbnmapr::get_urbn_map(map = "counties", sf = TRUE)
-
-  fips_col <- intersect(c("county_fips","geoid","GEOID","fips","FIPS"), names(counties))
-  if (length(fips_col) < 1L) {
-    stop("Could not find a county FIPS/GEOID column in urbnmapr counties map. Columns: ",
-         paste(names(counties), collapse = ", "))
-  }
-  # prefer county_fips if available
-  if ("county_fips" %in% fips_col) fips_col <- "county_fips" else fips_col <- fips_col[[1L]]
-
-  ctab <- data.table::data.table(
-    county_fips = as.character(counties[[fips_col]])
+  ctab <- data.table(
+    county_fips = as.character(counties$county_fips),
+    county_name = as.character(counties$county_name)
   )
-  # normalize to 5-digit
-  ctab[, county_fips := stringr::str_pad(county_fips, 5, pad = "0")]
-  ctab <- unique(ctab)
-
-  # year-commodity pairs present in ADM availability
+  # all FIPS * all (year, commodity) present in ADM
   yc <- unique(adm[, .(commodity_year, commodity_code)])
-
-  # safe cartesian join: all counties x (year, commodity)
-  yc[, key := 1L]
-  ctab[, key := 1L]
-  shell <- merge(yc, ctab, by = "key", allow.cartesian = TRUE)[, key := NULL]
-  yc[, key := NULL]
-  ctab[, key := NULL]
-
+  shell <- cbind(
+    yc[rep(seq_len(nrow(yc)), each = nrow(ctab))],
+    ctab[rep(seq_len(nrow(ctab)), times = nrow(yc))]
+  )
   # split FIPS once into numeric codes
   shell[, state_code  := as.integer(substr(county_fips, 1, 2))]
   shell[, county_code := as.integer(substr(county_fips, 3, 5))]
   shell[, county_fips := NULL]
-
-  # ------------------------------------------------------------------
-  # 4) Join availability to shell, then adoption (SOB)
-  # ------------------------------------------------------------------
-  avail <- merge(
-    shell, adm,
-    by = c("commodity_year","state_code","county_code","commodity_code"),
-    all.x = TRUE
-  )
-
+  
+  # ---- Join availability to shell, then to SOB adoption ---------------------
+  avail <- merge(shell, adm,
+                 by = c("commodity_year","state_code","county_code","commodity_code"),
+                 all.x = TRUE)
+  
+  # binary flags: replace NAs with 0
   for (nm in c("avail_aph","avail_sco","avail_eco90","avail_eco95")) {
     if (!nm %in% names(avail)) avail[, (nm) := 0L]
     avail[is.na(get(nm)), (nm) := 0L]
-    avail[, (nm) := as.integer(get(nm) %in% 1L)]
   }
-
-  dt <- merge(
-    avail, sob,
-    by = c("commodity_year","state_code","county_code","commodity_code"),
-    all.x = TRUE
-  )
-
+  
+  # join SOB
+  dt <- merge(avail, sob,
+              by = c("commodity_year","state_code","county_code","commodity_code"),
+              all.x = TRUE)
+  
   # replace missing numeric with 0 for acres
   num_cols <- c("insured_acres","sco","eco90","eco95")
   for (nm in num_cols) {
     if (!nm %in% names(dt)) dt[, (nm) := 0]
     dt[!is.finite(get(nm)) | is.na(get(nm)), (nm) := 0]
   }
-
+  
   # ensure single row per key; aggregate deterministically
   dt <- dt[
     , .(
-      avail_aph   = as.integer(max(avail_aph,   na.rm = TRUE)),
-      avail_sco   = as.integer(max(avail_sco,   na.rm = TRUE)),
-      avail_eco90 = as.integer(max(avail_eco90, na.rm = TRUE)),
-      avail_eco95 = as.integer(max(avail_eco95, na.rm = TRUE)),
+      avail_aph  = as.integer(max(avail_aph,  na.rm = TRUE)),
+      avail_sco  = as.integer(max(avail_sco,  na.rm = TRUE)),
+      avail_eco90= as.integer(max(avail_eco90,na.rm = TRUE)),
+      avail_eco95= as.integer(max(avail_eco95,na.rm = TRUE)),
       insured_acres = sum(insured_acres, na.rm = TRUE),
       sco           = sum(sco,           na.rm = TRUE),
       eco90         = sum(eco90,         na.rm = TRUE),
@@ -234,12 +178,10 @@ build_supplemental_offering_and_adoption <- function(sob) {
     ),
     by = .(commodity_year, state_code, county_code, commodity_code)
   ]
-
+  
   # rebuild FIPS for convenience
-  dt[, county_fips := paste0(
-    stringr::str_pad(state_code, 2, pad = "0"),
-    stringr::str_pad(county_code, 3, pad = "0")
-  )]
+  dt[, county_fips := paste0(stringr::str_pad(state_code, 2, pad = "0"),
+                             stringr::str_pad(county_code, 3, pad = "0"))]
 
   dt[]
 }
