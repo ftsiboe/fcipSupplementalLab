@@ -1,5 +1,5 @@
 # =============================================================================
-# Script overview
+# Script overview                                                           ####
 #
 # This script builds a reproducible data pipeline for analyzing the availability,
 # adoption, and agent involvement of supplemental crop insurance products in the
@@ -108,15 +108,19 @@ rm(list= ls()[!(ls() %in% c(Keep.List))]);gc()
 # Reload the study environment settings (years, paths, etc.)
 study_environment <-readRDS(file.path(directory_data,"study_environment.rds"))
 
-# Pull and clean RMA Summary of Business (SOBTPU) data for the target years.
-# Key filters/settings:
-# - insurance_plan: list of plan codes to keep (includes common base plans + area plans)
-# - acres_only: restrict to acreage-level outputs (avoid liability/premium if not needed)
-# - addon_only: keep add-on/supplemental products (e.g., SCO/ECO) where applicable
-# - harmonize_* flags: standardize codes for cross-year consistency (selectively enabled)
 sob <- clean_rma_sobtpu(
   years = study_environment$year_beg:study_environment$year_end,
-  insurance_plan = c(1:3, 31:33, 35:36, 87:89, 90),
+  insurance_plan = c(
+    1:3, 90, # basic policy
+    31:33,   # SCO
+    87:89,   # ECO
+    35:36,   # Stacked Inc Prot Plan
+    16:17,   # MP
+    67:69,   # MCO
+    26:28,   # PACE
+    37,      # HIP-WI
+    38       # FIP-SI
+    ),
   acres_only = TRUE,
   addon_only = TRUE,
   harmonize_insurance_plan_code = TRUE,
@@ -124,7 +128,7 @@ sob <- clean_rma_sobtpu(
   harmonize_unit_structure_code = FALSE)
 
 # Compute/attach plan shares for supplemental plans (e.g., within-crop/county adoption shares).
-sob <- clean_supplemental_plan_shares(sob)
+sob <- get_supplemental_adoption(sob)
 
 # Save the cleaned SOB dataset for reuse in later steps.
 saveRDS(sob,file=file.path(directory_data,"cleaned_rma_sobtpu.rds"))
@@ -154,7 +158,7 @@ lapply(
   })
 
 # =============================================================================
-#  Clean agent-level data                                                   ####
+# Clean agent-level data                                                    ####
 
 # Reset workspace EXCEPT objects in Keep.List, then run garbage collection.
 rm(list= ls()[!(ls() %in% c(Keep.List))]);gc()
@@ -189,7 +193,7 @@ lapply(
   })
 
 # =============================================================================
-#  Build panel of supplemental insurance availability and adoption          ####
+# Build panel of supplemental insurance availability and adoption           ####
 
 # Reset workspace EXCEPT objects in Keep.List, then run garbage collection.
 rm(list= ls()[!(ls() %in% c(Keep.List))]);gc()
@@ -201,7 +205,7 @@ study_environment <- readRDS(file.path(directory_data,"study_environment.rds"))
 # - availability (offerings)
 # - adoption (uptake)
 # of supplemental insurance products, based on cleaned SOB data.
-df <- build_supplemental_offering_and_adoption(readRDS(file.path(directory_data,"cleaned_rma_sobtpu.rds")))
+df <- build_supplemental_adoption_dynamics(readRDS(file.path(directory_data,"cleaned_rma_sobtpu.rds")))
 
 # Save the final panel dataset
 saveRDS(df,file=file.path(directory_data,"supplemental_offering_and_adoption.rds"))
@@ -242,3 +246,8 @@ function(){
 
 }
 # =============================================================================
+
+"study_environment.rds"
+"cleaned_rma_sobtpu.rds"
+"supplemental_offering_and_adoption.rds"
+

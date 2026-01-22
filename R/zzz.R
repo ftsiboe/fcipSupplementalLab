@@ -42,7 +42,8 @@
     ll_value rrs1 rrs2 rrs3 ul_chglvl00 ul_chglvl01 ul_chgpct00
     ul_chgpct01 ul_value value valueT variable weights WEIGHTS area_km2 centroid coverage_type_code cx cy endorsed_acres
     geometry is_small label na.omit reporting_level_type state_abbv
-    value_cat file_name max_size size_mb ..cy_join_keys ..need_cy ..pool_keys ..sob_join_keys",
+    value_cat file_name max_size size_mb ..cy_join_keys ..need_cy ..pool_keys ..sob_join_keys
+        coverage_name supplemental_area supplemental_share adoption_acres eligibile offered supplemental_plan",
         "\\s+"
       )[[1]]
     )

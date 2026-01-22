@@ -18,9 +18,8 @@ if(toupper(as.character(Sys.info()[["sysname"]])) %in% "WINDOWS"){
     file.path(codeLibrary,"plot/ers_theme.R"),
     paste0(file.path(codeLibrary,"fcip//"),
            c("get_fcip_agents.R",
-             "clean_supplemental_plan_shares.R",
-             "clean_rma_sobtpu.R",
-             "build_supplemental_offering_and_adoption.R"))
+             "build_supplemental_adoption_dynamics.R",
+             "clean_rma_sobtpu.R"))
   )
   file.copy(from= list_function, to = "R/", overwrite = TRUE, recursive = FALSE, copy.mode = TRUE)
 }
