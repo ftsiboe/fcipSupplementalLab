@@ -7,31 +7,28 @@
 build_supplemental_adoption_dynamics(sob, supplemental_stubs = NULL)
 }
 \arguments{
-\item{sob}{A data.frame or \code{data.table} containing (at minimum)
+\item{sob}{A \code{data.frame} or \code{data.table} containing (at minimum)
 \code{commodity_year}, \code{state_code}, \code{county_code}, \code{commodity_code},
-\code{insured_acres}, and the supplemental measure columns referenced by
-\code{supplemental_stubs[[*]]$measure}. Measures may be shares (ending in \code{"_share"})
-or acreage totals (e.g., \code{stax_area}, \code{mp_area}).}
+\code{supplemental_plan}, \code{eligible_acres}, and \code{supplemental_area}.}
 
 \item{supplemental_stubs}{Optional named list defining which supplemental products to
-include and how to interpret them. Each element must be a list with:
+include. Each element must be a list with:
 \itemize{
-\item \code{measure}: column name in \code{sob} to use (share or acres)
 \item \code{offering_codes}: insurance plan codes indicating the product is offered in ADM
-\item \code{eligibile_codes}: insurance plan codes indicating the county is eligible in ADM
+\item \code{eligible_codes}: insurance plan codes indicating the county is eligible in ADM
 }
 If \code{NULL}, a default set is constructed for SCO, STAX, MP, ECO (90/95), HIP-WI, PACE,
-and FIP-SI.}
+and FIP-SI (with plan-code ranges as specified in the function body).}
 }
 \value{
 A \code{data.table} with one row per
-\code{commodity_year by state_code by county_code bycommodity_code by supplemental_plan}
-containing:
+\code{commodity_year} x \code{state_code} x \code{county_code} x \code{commodity_code}
+x \code{supplemental_plan} containing:
 \itemize{
-\item \code{eligibile}: 0/1 indicator for eligibility in ADM
+\item \code{eligible}: 0/1 indicator for eligibility in ADM
 \item \code{supplemental_offered}: 0/1 indicator for offering availability in ADM
-\item \code{insured_acres}: aggregated acreage universe used for the stub
-\item \code{supplemental_acres}: aggregated adoption acres (derived from shares or acres)
+\item \code{eligible_acres}: aggregated base-policy eligible/insured acres denominator
+\item \code{supplemental_acres}: aggregated supplemental acres (\code{supplemental_area})
 \item \code{county_fips}: 5-digit county FIPS (character)
 \item \code{supplemental_plan}: stub name (character)
 }
@@ -39,55 +36,45 @@ containing:
 \description{
 Builds a county-year-commodity panel describing \strong{(i) eligibility}, \strong{(ii) offering
 availability}, and \strong{(iii) adoption intensity} for selected FCIP supplemental insurance
-products. The function combines:
+products.
+
+This function expects a \strong{pre-processed SOB/TPU-style} dataset that already contains
+stub-level adoption measures in:
 \itemize{
-\item a cleaned SOB/TPU-derived dataset containing base insured acres and (optionally)
-supplemental adoption measures (either as shares or as acre totals), and
-\item RMA Actuarial Data Master (ADM) insurance-offer records from
-\code{A00030_InsuranceOffer} to determine whether a supplemental product is eligible and/or
-offered in each county-year-commodity.
+\item \code{supplemental_plan}: a stub identifier (e.g., \code{"sco"}, \code{"eco90"})
+\item \code{eligible_acres}: the base-policy eligible/insured acres denominator
+\item \code{supplemental_area}: the supplemental endorsed/acquired acres numerator
 }
+
+The function then augments these adoption totals with county-level \strong{availability flags}
+derived from RMA ADM insurance offer records (\code{A00030_InsuranceOffer}).
 }
 \details{
-For each entry in \code{supplemental_stubs}, the function performs the following steps:
-
+For each stub name in \code{supplemental_stubs}, the function:
 \enumerate{
-\item \strong{Input validation:} checks that \code{sob} contains the required identifiers and the
-requested supplemental measure column (e.g., \code{sco_share} or \code{stax_area}).
+\item Filters \code{sob} to records whose \code{supplemental_plan} matches the stub name
+(via \code{grepl()}) and aggregates \code{eligible_acres} and \code{supplemental_area} to
+\code{commodity_year} x \code{state_code} x \code{county_code} x \code{commodity_code}
+(retaining \code{supplemental_plan}).
 
-\item \strong{Compute adoption acres from SOB/TPU:}
+\item Downloads ADM \code{A00030_InsuranceOffer} for each year present in \code{sob}
+(via \code{rfcip::get_adm_data()}) and constructs two binary flags:
 \itemize{
-\item If the measure name contains \code{"_share"}, it computes
-\code{adoption_acres = insured_acres * measure} (interpreting the measure as a share of
-base insured acres).
-\item Otherwise, it treats the measure as an acreage quantity and sets
-\code{adoption_acres = measure} and then sets \code{insured_acres = adoption_acres}
-(so the "insured_acres" field in the stub-specific output reflects the relevant acreage
-universe for that product).
+\item \code{eligible}: equals 1 if any record exists with
+\code{insurance_plan_code} in \code{eligible_codes}
+\item \code{offered}: equals 1 if any record exists with
+\code{insurance_plan_code} in \code{offering_codes}
 }
-It then aggregates adoption acres and insured acres to
-\code{commodity_year by state_code by county_code by commodity_code} and restricts to
-\code{commodity_year >= 2015}.
+These indicators are collapsed using a \code{max()} rule within each county-year-commodity.
+A companion 'all-commodities' version (\code{commodity_code = 0}) is also appended.
 
-\item \strong{Construct ADM availability flags:} for each year present in \code{sob},
-downloads ADM \code{A00030_InsuranceOffer} via \code{rfcip::get_adm_data()}, filters to
-the union of eligibility and offering plan codes for the stub, and creates two binary
-county-level indicators:
-\itemize{
-\item \code{eligibile}: equals 1 if any record exists with a plan in \code{eligibile_codes}
-\item \code{offered}: equals 1 if any record exists with a plan in \code{offering_codes}
-}
-(Indicators are collapsed using a max() rule within each county-year-commodity.)
+\item Builds a complete county shell from ADM \code{A00440_County} for each year and
+crosses it with the set of \code{(commodity_year, commodity_code)} pairs present in the
+ADM availability table so counties with zero insured/adopted acres are retained.
 
-\item \strong{Build a complete county shell:} creates a complete county shell using
-\code{urbnmapr::get_urbn_map("counties")} and crosses all counties with the set of
-\code{(commodity_year, commodity_code)} pairs present in ADM so that counties with zero
-insured/adopted acres are retained in the final panel.
-
-\item \strong{Join and finalize:} left-joins ADM availability to the county shell, then joins
-adoption totals from SOB/TPU. Missing numeric fields are set to 0. The result is then
-aggregated deterministically to one row per county-year-commodity and labeled with
-\code{supplemental_plan} (the stub name) and a reconstructed \code{county_fips}.
+\item Left-joins availability flags to the county shell, then joins adoption totals from
+\code{sob}. Missing numeric fields are set to 0. The function enforces basic bounds such
+as \code{supplemental_acres <= eligible_acres}.
 }
 
 The returned object stacks all stub-specific panels into one long table with a

@@ -127,12 +127,8 @@ sob <- clean_rma_sobtpu(
   harmonize_coverage_level_percent = FALSE,
   harmonize_unit_structure_code = FALSE)
 
-# Compute/attach plan shares for supplemental plans (e.g., within-crop/county adoption shares).
-sob <- get_supplemental_adoption(sob)
-
 # Save the cleaned SOB dataset for reuse in later steps.
 saveRDS(sob,file=file.path(directory_data,"cleaned_rma_sobtpu.rds"))
-
 # =============================================================================
 # Build SCO/ECO/Area ADM table (adds SCO88/SCO90)                           ####
 
@@ -147,7 +143,7 @@ study_environment <-readRDS(file.path(directory_data,"study_environment.rds"))
 # - write each year's cleaned table to an .rds file
 # Using tryCatch ensures the loop continues even if a particular year fails.
 lapply(
-  2015:study_environment$year_end,
+  2015:(study_environment$year_end+1),
   function(year){
     tryCatch({
       saveRDS(clean_rma_sco_and_eco_adm(year),
@@ -201,11 +197,94 @@ rm(list= ls()[!(ls() %in% c(Keep.List))]);gc()
 # Reload study environment
 study_environment <- readRDS(file.path(directory_data,"study_environment.rds"))
 
+sob <- as.data.table(
+  rfcip::get_sob_data(
+    force = TRUE,
+    year = 2014:as.numeric(format(Sys.Date(),"%Y")),
+    insurance_plan = c(
+      1:3,90,  # basic individual based policy
+      4:6,     # basic area based policy
+      16:17,   # MP
+      35:36,   # STAX
+      31:33,   # SCO
+      37,      # HIP-WI
+      87:89,   # ECO
+      26:28,   # PACE
+      38,      # FIP-SI
+      67:69    # MCO
+    ),
+    group_by=c("insurance_plan","cov_lvl","county","delivery_type")))
+
+sob[,commodity_code := 0]
+
+# table(sob$delivery_type_code)
+
+sob <- sob[!delivery_type_code %in% "RCAT"]
+
+sobcrop <- as.data.table(
+  rfcip::get_sob_data(
+    force = TRUE,
+    year = 2014:as.numeric(format(Sys.Date(),"%Y")),
+    insurance_plan = c(
+      1:3,90,  # basic individual based policy
+      4:6,     # basic area based policy
+      16:17,   # MP
+      35:36,   # STAX
+      31:33,   # SCO
+      37,      # HIP-WI
+      87:89,   # ECO
+      26:28,   # PACE
+      38,      # FIP-SI
+      67:69    # MCO
+    ),
+    group_by=c("insurance_plan","cov_lvl","crop","county","delivery_type")))
+
+sobcrop <- sobcrop[!delivery_type_code %in% "RCAT"]
+
+sob <- data.table::rbindlist(list(sobcrop,sob),fill = TRUE)
+
+sob[!quantity_type %in% "Acres",quantity := 0]
+sob[!quantity_type %in% "Acres",companion_endorsed_acres := 0]
+
+sob[,insured_acres := quantity]
+sob[,endorsed_acres := companion_endorsed_acres]
+sob[,coverage_level_percent := cov_level_percent]
+sob[insurance_plan_code %in% 90,insurance_plan_code := 1]
+
+sob[, state_code  := as.numeric(as.character(state_code))]
+sob[, county_code := as.numeric(as.character(county_code))]
+
+# Compute/attach plan shares for supplemental plans (e.g., within-crop/county adoption shares).
+sob <- get_supplemental_area(sob)
+
 # Build a panel dataset that combines:
 # - availability (offerings)
 # - adoption (uptake)
 # of supplemental insurance products, based on cleaned SOB data.
-df <- build_supplemental_adoption_dynamics(readRDS(file.path(directory_data,"cleaned_rma_sobtpu.rds")))
+df <- build_supplemental_adoption_dynamics(sob)
+
+
+sco_all <- copy(df)[
+  grepl("sco",supplemental_plan), .(
+    eligible            = as.integer(max(eligible,  na.rm = TRUE)),
+    supplemental_offered = as.integer(max(supplemental_offered,  na.rm = TRUE)),
+    eligible_acres       = sum(eligible_acres, na.rm = TRUE),
+    supplemental_acres   = sum(supplemental_acres, na.rm = TRUE)
+  ),
+  by = .(commodity_year, state_code, county_code, county_name, county_fips, commodity_code)
+][,supplemental_plan := "sco00"]
+
+eco_all <- copy(df)[
+  grepl("eco",supplemental_plan), .(
+    eligible            = as.integer(max(eligible,  na.rm = TRUE)),
+    supplemental_offered = as.integer(max(supplemental_offered,  na.rm = TRUE)),
+    eligible_acres       = sum(eligible_acres, na.rm = TRUE),
+    supplemental_acres   = sum(supplemental_acres, na.rm = TRUE)
+  ),
+  by = .(commodity_year, state_code, county_code, county_name, county_fips, commodity_code)
+][,supplemental_plan := "eco00"]
+
+df <- rbind(sco_all,eco_all,df)
 
 # Save the final panel dataset
 saveRDS(df,file=file.path(directory_data,"supplemental_offering_and_adoption.rds"))

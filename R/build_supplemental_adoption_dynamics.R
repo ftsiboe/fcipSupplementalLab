@@ -3,87 +3,75 @@
 #' @description
 #' Builds a county-year-commodity panel describing **(i) eligibility**, **(ii) offering
 #' availability**, and **(iii) adoption intensity** for selected FCIP supplemental insurance
-#' products. The function combines:
+#' products.
+#'
+#' This function expects a **pre-processed SOB/TPU-style** dataset that already contains
+#' stub-level adoption measures in:
 #' \itemize{
-#'   \item a cleaned SOB/TPU-derived dataset containing base insured acres and (optionally)
-#'   supplemental adoption measures (either as shares or as acre totals), and
-#'   \item RMA Actuarial Data Master (ADM) insurance-offer records from
-#'   \code{A00030_InsuranceOffer} to determine whether a supplemental product is eligible and/or
-#'   offered in each county-year-commodity.
+#'   \item \code{supplemental_plan}: a stub identifier (e.g., \code{"sco"}, \code{"eco90"})
+#'   \item \code{eligible_acres}: the base-policy eligible/insured acres denominator
+#'   \item \code{supplemental_area}: the supplemental endorsed/acquired acres numerator
 #' }
 #'
+#' The function then augments these adoption totals with county-level **availability flags**
+#' derived from RMA ADM insurance offer records (\code{A00030_InsuranceOffer}).
+#'
 #' @details
-#' For each entry in \code{supplemental_stubs}, the function performs the following steps:
-#'
+#' For each stub name in \code{supplemental_stubs}, the function:
 #' \enumerate{
-#'   \item **Input validation:** checks that `sob` contains the required identifiers and the
-#'   requested supplemental measure column (e.g., \code{sco_share} or \code{stax_area}).
+#'   \item Filters \code{sob} to records whose \code{supplemental_plan} matches the stub name
+#'   (via \code{grepl()}) and aggregates \code{eligible_acres} and \code{supplemental_area} to
+#'   \code{commodity_year} x \code{state_code} x \code{county_code} x \code{commodity_code}
+#'   (retaining \code{supplemental_plan}).
 #'
-#'   \item **Compute adoption acres from SOB/TPU:**
+#'   \item Downloads ADM \code{A00030_InsuranceOffer} for each year present in \code{sob}
+#'   (via \code{rfcip::get_adm_data()}) and constructs two binary flags:
 #'   \itemize{
-#'     \item If the measure name contains \code{"_share"}, it computes
-#'     \code{adoption_acres = insured_acres * measure} (interpreting the measure as a share of
-#'     base insured acres).
-#'     \item Otherwise, it treats the measure as an acreage quantity and sets
-#'     \code{adoption_acres = measure} and then sets \code{insured_acres = adoption_acres}
-#'     (so the "insured_acres" field in the stub-specific output reflects the relevant acreage
-#'     universe for that product).
+#'     \item \code{eligible}: equals 1 if any record exists with
+#'     \code{insurance_plan_code} in \code{eligible_codes}
+#'     \item \code{offered}: equals 1 if any record exists with
+#'     \code{insurance_plan_code} in \code{offering_codes}
 #'   }
-#'   It then aggregates adoption acres and insured acres to
-#'   \code{commodity_year by state_code by county_code by commodity_code} and restricts to
-#'   \code{commodity_year >= 2015}.
+#'   These indicators are collapsed using a \code{max()} rule within each county-year-commodity.
+#'   A companion 'all-commodities' version (\code{commodity_code = 0}) is also appended.
 #'
-#'   \item **Construct ADM availability flags:** for each year present in \code{sob},
-#'   downloads ADM \code{A00030_InsuranceOffer} via \code{rfcip::get_adm_data()}, filters to
-#'   the union of eligibility and offering plan codes for the stub, and creates two binary
-#'   county-level indicators:
-#'   \itemize{
-#'     \item \code{eligibile}: equals 1 if any record exists with a plan in \code{eligibile_codes}
-#'     \item \code{offered}: equals 1 if any record exists with a plan in \code{offering_codes}
-#'   }
-#'   (Indicators are collapsed using a max() rule within each county-year-commodity.)
+#'   \item Builds a complete county shell from ADM \code{A00440_County} for each year and
+#'   crosses it with the set of \code{(commodity_year, commodity_code)} pairs present in the
+#'   ADM availability table so counties with zero insured/adopted acres are retained.
 #'
-#'   \item **Build a complete county shell:** creates a complete county shell using
-#'   \code{urbnmapr::get_urbn_map("counties")} and crosses all counties with the set of
-#'   \code{(commodity_year, commodity_code)} pairs present in ADM so that counties with zero
-#'   insured/adopted acres are retained in the final panel.
-#'
-#'   \item **Join and finalize:** left-joins ADM availability to the county shell, then joins
-#'   adoption totals from SOB/TPU. Missing numeric fields are set to 0. The result is then
-#'   aggregated deterministically to one row per county-year-commodity and labeled with
-#'   \code{supplemental_plan} (the stub name) and a reconstructed \code{county_fips}.
+#'   \item Left-joins availability flags to the county shell, then joins adoption totals from
+#'   \code{sob}. Missing numeric fields are set to 0. The function enforces basic bounds such
+#'   as \code{supplemental_acres <= eligible_acres}.
 #' }
 #'
 #' The returned object stacks all stub-specific panels into one long table with a
 #' \code{supplemental_plan} identifier.
 #'
-#' @param sob A data.frame or \code{data.table} containing (at minimum)
+#' @param sob A \code{data.frame} or \code{data.table} containing (at minimum)
 #' \code{commodity_year}, \code{state_code}, \code{county_code}, \code{commodity_code},
-#' \code{insured_acres}, and the supplemental measure columns referenced by
-#' \code{supplemental_stubs[[*]]$measure}. Measures may be shares (ending in \code{"_share"})
-#' or acreage totals (e.g., \code{stax_area}, \code{mp_area}).
+#' \code{supplemental_plan}, \code{eligible_acres}, and \code{supplemental_area}.
 #'
 #' @param supplemental_stubs Optional named list defining which supplemental products to
-#' include and how to interpret them. Each element must be a list with:
+#' include. Each element must be a list with:
 #' \itemize{
-#'   \item \code{measure}: column name in \code{sob} to use (share or acres)
 #'   \item \code{offering_codes}: insurance plan codes indicating the product is offered in ADM
-#'   \item \code{eligibile_codes}: insurance plan codes indicating the county is eligible in ADM
+#'   \item \code{eligible_codes}: insurance plan codes indicating the county is eligible in ADM
 #' }
 #' If \code{NULL}, a default set is constructed for SCO, STAX, MP, ECO (90/95), HIP-WI, PACE,
-#' and FIP-SI.
+#' and FIP-SI (with plan-code ranges as specified in the function body).
 #'
 #' @return A \code{data.table} with one row per
-#' \code{commodity_year by state_code by county_code bycommodity_code by supplemental_plan}
-#' containing:
+#' \code{commodity_year} x \code{state_code} x \code{county_code} x \code{commodity_code}
+#' x \code{supplemental_plan} containing:
 #' \itemize{
-#'   \item \code{eligibile}: 0/1 indicator for eligibility in ADM
+#'   \item \code{eligible}: 0/1 indicator for eligibility in ADM
 #'   \item \code{supplemental_offered}: 0/1 indicator for offering availability in ADM
-#'   \item \code{insured_acres}: aggregated acreage universe used for the stub
-#'   \item \code{supplemental_acres}: aggregated adoption acres (derived from shares or acres)
+#'   \item \code{eligible_acres}: aggregated base-policy eligible/insured acres denominator
+#'   \item \code{supplemental_acres}: aggregated supplemental acres (\code{supplemental_area})
 #'   \item \code{county_fips}: 5-digit county FIPS (character)
 #'   \item \code{supplemental_plan}: stub name (character)
 #' }
+#'
 #' @export
 build_supplemental_adoption_dynamics <- function(
     sob,
@@ -91,215 +79,225 @@ build_supplemental_adoption_dynamics <- function(
   
   if(is.null(supplemental_stubs)){
     supplemental_stubs <- list(
-      sco   = list(measure = "sco_share"   , offering_codes = 31:33 , eligibile_codes = c(1:3,90)),
-      stax  = list(measure = "stax_area"   , offering_codes = 35:36 , eligibile_codes = c(35:36,1:3,90)),
-      mp    = list(measure = "mp_area"     , offering_codes = 16:17 , eligibile_codes = c(16:17)),
-      eco90 = list(measure = "eco90_share" , offering_codes = 87:89 , eligibile_codes = c(1:3,90)),
-      eco95 = list(measure = "eco95_share" , offering_codes = 87:89 , eligibile_codes = c(1:3,90)),
-      hipwi = list(measure = "hipwi_share" , offering_codes = 37    , eligibile_codes = c(1:3,90)),
-      pace  = list(measure = "pace_share"  , offering_codes = 26:28 , eligibile_codes = c(1:3,90)),
-      fipsi = list(measure = "fipsi_share" , offering_codes = 38    , eligibile_codes = c(1:3,90))
+      sco   = list(offering_codes = 31:33 , eligible_codes = c(1:3,90)),
+      stax  = list(offering_codes = 35:36 , eligible_codes = c(35:36,1:3,90,4:6)),
+      mp    = list(offering_codes = 16:17 , eligible_codes = c(16:17,1:3,90,4:6)),
+      eco90 = list(offering_codes = 87:89 , eligible_codes = c(1:3,90)),
+      eco95 = list(offering_codes = 87:89 , eligible_codes = c(1:3,90)),
+      hipwi = list(offering_codes = 37    , eligible_codes = c(1:3,90)),
+      pace  = list(offering_codes = 26:28 , eligible_codes = c(1:3,90)),
+      fipsi = list(offering_codes = 38    , eligible_codes = c(1:3,90))
     )
   }
   
   sob <- data.table::as.data.table(sob)
   
+  req_cols <- c("commodity_year","state_code","county_code","commodity_code","supplemental_plan","eligible_acres","supplemental_area")
+  missing_cols <- setdiff(req_cols, names(sob))
+  if (length(missing_cols)) {
+    stop("SOB/TPU file missing required columns: ",
+         paste(missing_cols, collapse = ", "))
+  }
+  
   res <- lapply(1:length(supplemental_stubs), function(stub) {
-    # stub <- 1
-    measure <- supplemental_stubs[[stub]]$measure
-    eligibile_codes <- supplemental_stubs[[stub]]$eligibile_codes
-    offering_codes <- supplemental_stubs[[stub]]$offering_codes
-    
-    req_cols <- c("commodity_year","state_code","county_code","commodity_code","insured_acres",measure)
-    missing_cols <- setdiff(req_cols, names(sob))
-    if (length(missing_cols)) {
-      stop("SOB/TPU file missing required columns: ",
-           paste(missing_cols, collapse = ", "))
-    }
-    
-    # ---- SOB/TPU: compute adoption acres & aggregate --------------------------
-    supplemental_acres <- copy(sob)
-    
-    if(grepl("_share",measure)){
-      supplemental_acres[, adoption_acres := as.numeric(insured_acres) * as.numeric(get(measure))]
-    }else{
-      supplemental_acres[, adoption_acres := as.numeric(get(measure))]
-      supplemental_acres[, insured_acres := adoption_acres]
-    }
- 
-    supplemental_acres <- supplemental_acres[
-      commodity_year >= 2015,
-      .(insured_acres  = sum(insured_acres, na.rm = TRUE),
-        adoption_acres = sum(adoption_acres, na.rm = TRUE)),
-      by = .(commodity_year, state_code, county_code, commodity_code)]
-    
-    # ---- ADM availability by year ---------------------------------------------
-    
-    adm <- lapply(sort(unique(sob$commodity_year)), function(y) {
-      dt <- as.data.table(rfcip::get_adm_data(y, dataset = "A00030_InsuranceOffer"))
-      # coerce types we'll use
-      cols <- c("commodity_year","state_code","county_code","commodity_code","insurance_plan_code")
-      dt[, (cols) := lapply(.SD, function(x) as.numeric(as.character(x))), .SDcols = cols]
-      dt <- dt[insurance_plan_code %in% c(eligibile_codes, offering_codes)]
+    tryCatch({
       
-      # per spec: ECO exists 2021+
-      out <- rbind(
-        dt[insurance_plan_code %in% eligibile_codes,
-           .(plan = "eligibile", available = 1L),
-           by = .(commodity_year, state_code, county_code, commodity_code)],
-        dt[insurance_plan_code %in% offering_codes,
-           .(plan = "offered", available = 1L),
-           by = .(commodity_year, state_code, county_code, commodity_code)]
-      )
+      # stub <- 1
+      eligible_codes <- supplemental_stubs[[stub]]$eligible_codes
+      offering_codes  <- supplemental_stubs[[stub]]$offering_codes
       
-      # cast to wide, then collapse by max()
-      out <- dcast(out,
-                   commodity_year + state_code + county_code + commodity_code ~ plan,
-                   value.var = "available",
-                   fun.aggregate = function(z) as.integer(max(z %in% 1)))
-      out[]
-    })
-    adm <- rbindlist(adm, fill = TRUE)
-    
-    adm[,supplemental_plan := names(supplemental_stubs)[stub]]
-    
-    # ---- Build county shell (from urbnmapr) -----------------------------------
-    counties <- urbnmapr::get_urbn_map(map = "counties", sf = TRUE)
-    ctab <- data.table(
-      county_fips = as.character(counties$county_fips),
-      county_name = as.character(counties$county_name)
-    )
-    # all FIPS * all (year, commodity) present in ADM
-    yc <- unique(adm[, .(commodity_year, commodity_code)])
-    shell <- cbind(
-      yc[rep(seq_len(nrow(yc)), each = nrow(ctab))],
-      ctab[rep(seq_len(nrow(ctab)), times = nrow(yc))]
-    )
-    # split FIPS once into numeric codes
-    shell[, state_code  := as.integer(substr(county_fips, 1, 2))]
-    shell[, county_code := as.integer(substr(county_fips, 3, 5))]
-    shell[, county_fips := NULL]
-    
-    # ---- Join availability to shell, then to SOB adoption ---------------------
-    avail <- merge(shell, adm,
-                   by = c("commodity_year","state_code","county_code","commodity_code"),
-                   all.x = TRUE)
-    
-    # binary flags: replace NAs with 0
-    for (nm in c("eligibile","offered")){
-      if (!nm %in% names(avail)) avail[, (nm) := 0L]
-      avail[is.na(get(nm)), (nm) := 0L]
-    }
-    
-    # join supplemental_acres
-    dt <- merge(avail, supplemental_acres,
-                by = c("commodity_year","state_code","county_code","commodity_code"),
-                all.x = TRUE)
-    
-    # replace missing numeric with 0 for acres
-    num_cols <- c("insured_acres","adoption_acres")
-    for (nm in num_cols) {
-      if (!nm %in% names(dt)) dt[, (nm) := 0]
-      dt[!is.finite(get(nm)) | is.na(get(nm)), (nm) := 0]
-    }
-    
-    # ensure single row per key; aggregate deterministically
-    dt <- dt[
-      , .(
-        eligibile            = as.integer(max(eligibile,  na.rm = TRUE)),
-        supplemental_offered = as.integer(max(offered,  na.rm = TRUE)),
-        insured_acres        = sum(insured_acres, na.rm = TRUE),
-        supplemental_acres   = sum(adoption_acres, na.rm = TRUE)
-      ),
-      by = .(commodity_year, state_code, county_code, commodity_code)
-    ]
-    
-    dt[,supplemental_plan := names(supplemental_stubs)[stub]]
-    # rebuild FIPS for convenience
-    dt[, county_fips := paste0(stringr::str_pad(state_code, 2, pad = "0"),
-                               stringr::str_pad(county_code, 3, pad = "0"))]
-    
-    dt[]
-    
+      # ---- SOB/TPU: compute adoption acres & aggregate --------------------------
+      supplemental_acres <- data.table::copy(sob)[
+        grepl(names(supplemental_stubs)[stub],supplemental_plan),
+        .(eligible_acres = sum(eligible_acres, na.rm = TRUE),
+          supplemental_area = sum(supplemental_area, na.rm = TRUE)),
+        by = c("commodity_year","state_code","county_code","commodity_code","supplemental_plan")]
+      
+      supplemental_acres[supplemental_area > eligible_acres, supplemental_area:= eligible_acres]
+      supplemental_acres <- supplemental_acres[!eligible_acres %in% 0]
+      
+      # ---- ADM availability by year ---------------------------------------------
+      
+      adm <- lapply(sort(unique(sob$commodity_year)), function(y) {
+        dt <- as.data.table(rfcip::get_adm_data(y, dataset = "A00030_InsuranceOffer"))
+        # coerce types we'll use
+        cols <- c("commodity_year","state_code","county_code","commodity_code","insurance_plan_code")
+        dt[, (cols) := lapply(.SD, function(x) as.numeric(as.character(x))), .SDcols = cols]
+        dt <- dt[insurance_plan_code %in% c(eligible_codes, offering_codes)]
+        
+        # per spec: ECO exists 2021+
+        out <- rbind(
+          dt[insurance_plan_code %in% eligible_codes,
+             .(plan = "eligible", available = 1L),
+             by = .(commodity_year, state_code, county_code, commodity_code)],
+          dt[insurance_plan_code %in% offering_codes,
+             .(plan = "offered", available = 1L),
+             by = .(commodity_year, state_code, county_code, commodity_code)]
+        )
+        
+        # cast to wide, then collapse by max()
+        out <- dcast(out,
+                     commodity_year + state_code + county_code + commodity_code ~ plan,
+                     value.var = "available",
+                     fun.aggregate = function(z) as.integer(max(z %in% 1)))
+        
+        for (nm in c("eligible","offered")) if (!nm %in% names(out)) out[, (nm) := 0L]
+        
+        out[]
+      })
+      adm <- rbindlist(adm, fill = TRUE)
+      
+      adm_all <- data.table::copy(adm)[
+        , .(
+          eligible = as.integer(max(eligible,  na.rm = TRUE)),
+          offered = as.integer(max(offered,  na.rm = TRUE))
+        ),
+        by = .(commodity_year, state_code, county_code)
+      ][,commodity_code := 0]
+      
+      adm <- rbind(adm,adm_all)
+      
+      for (nm in c("eligible","offered")){
+        adm[is.na(get(nm)), (nm) := 0L]
+      }
+      
+      # ---- Build county shell (from ADM A00440_County) -----------------------------
+      ctab <- lapply(sort(unique(sob$commodity_year)), function(y) {
+        x <- data.table::as.data.table(rfcip::get_adm_data(y, dataset = "A00440_County"))
+        
+        need <- c("state_code","county_code","county_name")
+        miss <- setdiff(need, names(x))
+        if (length(miss)) stop("A00440_County missing columns: ", paste(miss, collapse = ", "))
+        
+        x <- unique(x[, ..need])
+        
+        # coerce codes to integer (defensive)
+        x[, state_code  := as.numeric(as.character(state_code))]
+        x[, county_code := as.numeric(as.character(county_code))]
+        
+        x[, commodity_year := as.numeric(y)]
+        x[]
+      })
+      ctab <- data.table::rbindlist(ctab, fill = TRUE)
+      
+      # (year, commodity) support from ADM availability table
+      yc <- unique(adm[, .(commodity_year, commodity_code)])
+      yc[, commodity_year := as.numeric(commodity_year)]
+      yc[, commodity_code := as.numeric(commodity_code)]
+      
+      # Cross join within year (safe cartesian product)
+      yc[, .tmp_key := 1L]
+      ctab[, .tmp_key := 1L]
+      shell <- merge(yc, ctab, by = c("commodity_year", ".tmp_key"), allow.cartesian = TRUE)[, .tmp_key := NULL]
+      
+      # Build county_fips (5-digit) from codes
+      shell[, county_fips := paste0(
+        stringr::str_pad(state_code,  2, pad = "0"),
+        stringr::str_pad(county_code, 3, pad = "0")
+      )]
+      
+      # ---- Join availability to shell, then to SOB adoption ---------------------
+      avail <- merge(
+        shell, adm,
+        by = c("commodity_year","state_code","county_code","commodity_code"),
+        all.x = TRUE)
+      
+      # binary flags: replace NAs with 0
+      for (nm in c("eligible","offered")){
+        if (!nm %in% names(avail)) avail[, (nm) := 0L]
+        avail[is.na(get(nm)), (nm) := 0L]
+      }
+      
+      # join supplemental_acres
+      dt <- lapply(unique(supplemental_acres$supplemental_plan), function(nm) {
+        dt <- merge(
+          avail, supplemental_acres[supplemental_plan %in% nm],
+          by = c("commodity_year","state_code","county_code","commodity_code"),
+          all.x = TRUE)
+        dt[,supplemental_plan := nm]
+        dt[]
+      })
+      dt <- rbindlist(dt, fill = TRUE)
+      
+      # replace missing numeric with 0 for acres
+      num_cols <- c("eligible_acres","supplemental_area")
+      for (nm in num_cols) {
+        if (!nm %in% names(dt)) dt[, (nm) := 0]
+        dt[!is.finite(get(nm)) | is.na(get(nm)), (nm) := 0]
+      }
+      
+      # ensure single row per key; aggregate deterministically
+      dt <- dt[
+        , .(
+          eligible            = as.integer(max(eligible,  na.rm = TRUE)),
+          supplemental_offered = as.integer(max(offered,  na.rm = TRUE)),
+          eligible_acres       = sum(eligible_acres, na.rm = TRUE),
+          supplemental_acres   = sum(supplemental_area, na.rm = TRUE)
+        ),
+        by = .(commodity_year, state_code, county_code, county_name, commodity_code,supplemental_plan)
+      ]
+      
+      # rebuild FIPS for convenience
+      dt[, county_fips := paste0(stringr::str_pad(state_code, 2, pad = "0"),
+                                 stringr::str_pad(county_code, 3, pad = "0"))]
+      
+      dt[supplemental_acres > eligible_acres, supplemental_acres:= eligible_acres]
+      
+      dt[]
+    }, error=function(e){NULL})
   })
   
-  res <- rbindlist(res, fill = TRUE)
+  res <- Filter(Negate(is.null), res)
+  if (!length(res)) return(data.table::data.table())
+  res <- data.table::rbindlist(res, fill = TRUE)
   
   res[]
 }
 
 
-#' Build a Base-Policy Panel with Supplemental Adoption Measures from RMA SOB-TPU
+#' Build Supplemental Eligible Acres and Supplemental Area from RMA SOB-TPU
 #'
 #' @description
-#' Constructs an analysis-ready panel of **base insurance outcomes** and appends
-#' measures of **supplemental insurance adoption** and/or **supplemental acreage
-#' totals** for a user-specified set of FCIP supplemental products.
+#' Constructs a stacked, analysis-ready table of **supplemental adoption acres**
+#' (\code{supplemental_area}) and companion **eligible/base insured acres**
+#' (\code{eligible_acres}) for a user-specified set of FCIP supplemental products.
 #'
-#' The function first aggregates base (individual-based) insurance outcomes from
-#' `sob_full`, harmonizing plan code 90 to base plan 1 where applicable. It then
-#' sequentially augments this base panel with supplemental adoption measures
-#' computed via `get_supplemental_shares()` and with direct acreage aggregates
-#' for selected area-based products.
+#' This function is an orchestrator: it calls \code{allocate_supplemental_area()} for each
+#' requested product family (e.g., SCO, ECO, PACE), then row-binds the results into one
+#' long \code{data.table}. It does **not** compute shares; it returns levels that can be
+#' converted to shares downstream if desired.
 #'
 #' @details
-#' Output content depends on which supplemental plan codes are supplied:
-#'
+#' Output content depends on which plan codes are supplied in \code{supplemental_codes}.
+#' For each included product, \code{allocate_supplemental_area()} aggregates:
 #' \itemize{
-#'   \item **SCO (31-33):** Adds `sco_share`, measuring the share of base insured
-#'   acres stacked with SCO.
-#'
-#'   \item **ECO (87-89):** Adds coverage-specific adoption measures
-#'   `eco90_share` and `eco95_share`.
-#'
-#'   \item **PACE (26-28):** Adds `pace_share`.
-#'
-#'   \item **HIP-WI (37):** Adds `hipwi_share` (not disaggregated by base plan or
-#'   coverage level).
-#'
-#'   \item **FIP-SI (38):** Adds `fipsi_share`.
-#'
-#'   \item **MP (16-17):** Adds `mp_area`, representing aggregated acres insured
-#'   under Margin Protection.
-#'
-#'   \item **STAX (35-36):** Adds `stax_area`, representing aggregated acres
-#'   insured under STAX.
+#'   \item \code{supplemental_area} from \code{endorsed_acres} for the supplemental codes, and
+#'   \item \code{eligible_acres} from \code{insured_acres} for the corresponding base-policy codes,
 #' }
+#' at the requested disaggregation grain. Product labels are stored in
+#' \code{supplemental_plan} (e.g., \code{"sco"}, \code{"eco90"}, \code{"eco95"}).
 #'
-#' Adoption shares are based on `endorsed_acres` in the numerator and base-policy
-#' `insured_acres` in the denominator. Area-based products (MP and STAX) are
-#' returned as acreage totals rather than shares.
+#' @param sob A \code{data.table} of cleaned SOB-TPU records containing both base and
+#' supplemental policies. Must include \code{insured_acres}, \code{endorsed_acres},
+#' \code{insurance_plan_code}, and the identifier columns referenced in \code{disaggregates}.
 #'
-#' After all merges, the function enforces basic bounds:
-#' \itemize{
-#'   \item Non-finite values are set to 0
-#'   \item Negative values are truncated to 0
-#'   \item Share variables are capped at 1
-#' }
+#' @param supplemental_codes Integer vector of supplemental insurance plan codes to include.
+#' Defaults to a comprehensive set of FCIP supplemental products.
 #'
-#' @param sob_full A `data.table` of cleaned SOB-TPU records containing both base
-#'   and supplemental policies. Must include insured acres, endorsed acres,
-#'   financial totals, and standard FCIP identifier columns.
+#' @param disaggregates Optional character vector defining the primary aggregation grain.
+#' Defaults to \code{c("commodity_year","state_code","county_code","commodity_code")}.
 #'
-#' @param supplemental_codes Integer vector of supplemental insurance plan codes
-#'   to include. Defaults to a comprehensive set of FCIP supplemental products.
-#'
-#' @param disaggregates Optional character vector defining the primary analysis
-#'   grain for adoption measures. Defaults to commodity-year by county by
-#'   commodity/type/practice.
-#'
-#' @return A `data.table` containing base insured acreage and financial totals at
-#' the base-policy aggregation grain, augmented with one or more supplemental
-#' adoption variables (ending in `"_share"`) and/or supplemental acreage totals
-#' (ending in `"_area"`).
+#' @return A \code{data.table} containing the requested identifiers, a
+#' \code{supplemental_plan} label, and the level variables \code{eligible_acres} and
+#' \code{supplemental_area}.
 #'
 #' @export
-get_supplemental_adoption <- function(
-    sob_full,
+get_supplemental_area <- function(
+    sob,
     supplemental_codes = c(
       31:33,   # SCO
       87:89,   # ECO
-      35:36,   # Stacked Inc Prot Plan
+      35:36,   # STAX
       16:17,   # MP
       67:69,   # MCO
       26:28,   # PACE
@@ -309,236 +307,181 @@ get_supplemental_adoption <- function(
     disaggregates = NULL){
   
   if(is.null(disaggregates)){
-    disaggregates = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code")
+    disaggregates = c("commodity_year", "state_code", "county_code", "commodity_code")
   }
-  
-  # Base data aggregation
-  sob_base <- copy(sob_full)[insurance_plan_code %in% 90, insurance_plan_code:= 1][
-    insurance_plan_code %in% c(1:3),
-    .(
-      insured_acres        = sum(insured_acres,   na.rm = TRUE),
-      liability_amount     = sum(liability_amount,             na.rm = TRUE),
-      total_premium_amount = sum(total_premium_amount,         na.rm = TRUE),
-      subsidy_amount       = sum(subsidy_amount,               na.rm = TRUE),
-      indemnity_amount     = sum(indemnity_amount,             na.rm = TRUE)
-    ),
-    by = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code",
-           "unit_structure_code", "insurance_plan_code", "coverage_type_code", "coverage_level_percent")
-  ][
-    is.finite(insured_acres) & insured_acres > 0
-  ]
-  
-  data <- copy(sob_base)[
-    ,
-    .(
-      insured_acres        = sum(insured_acres,   na.rm = TRUE),
-      liability_amount     = sum(liability_amount,             na.rm = TRUE),
-      total_premium_amount = sum(total_premium_amount,         na.rm = TRUE),
-      subsidy_amount       = sum(subsidy_amount,               na.rm = TRUE),
-      indemnity_amount     = sum(indemnity_amount,             na.rm = TRUE)
-    ),
-    by = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code",
-           "unit_structure_code", "insurance_plan_code", "coverage_type_code", "coverage_level_percent")
-  ] 
+
+  res <- list()
   
   if(any(31:33 %in% supplemental_codes)){
-    sco_data <- get_supplemental_shares(
-      sob_base                = sob_base,
-      sob_full                = sob_full,
-      disaggregates           = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code"),
-      supplemental_codes      = 31:33,
-      base_anchor             = 30,
-      supplemental_name       = "sco",
+    res[[length(res)+1]] <- allocate_supplemental_area(
+      sob                       = sob,
+      disaggregates             = disaggregates,
+      base_policy_codes         = c(1,2,3,90),
+      supplemental_codes        = 31:33,
+      base_anchor               = 30,
+      supplemental_name         = "sco",
       track_base_plan           = TRUE,
       track_base_coverage_level = TRUE,
-      split_by_coverage_level   = FALSE)
-    data <- merge(data, sco_data, by = intersect(names(data), names(sco_data)), all = TRUE)
+      split_by_coverage_level   = TRUE)
   }
   
   if(any(87:89 %in% supplemental_codes)){
-    eco_data <- get_supplemental_shares(
-      sob_base                  = sob_base,
-      sob_full                  = sob_full,
-      disaggregates             = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code"),
+    res[[length(res)+1]] <- allocate_supplemental_area(
+      sob                       = sob,
+      disaggregates             = disaggregates,
+      base_policy_codes         = c(1,2,3,90),
       supplemental_codes        = 87:89,
       base_anchor               = 86,
       supplemental_name         = "eco",
       track_base_plan           = TRUE,
       track_base_coverage_level = TRUE,
       split_by_coverage_level   = TRUE)
-    data <- merge(data, eco_data, by = intersect(names(data), names(eco_data)), all = TRUE)
   }
   
   if(any(26:28 %in% supplemental_codes)){
-    pace_data <- get_supplemental_shares(
-      sob_base                = sob_base,
-      sob_full                = sob_full,
-      disaggregates           = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code"),
-      supplemental_codes      = 26:28,
-      base_anchor             = 25,
-      supplemental_name       = "pace",
+    res[[length(res)+1]] <- allocate_supplemental_area(
+      sob                       = sob,
+      disaggregates             = disaggregates,
+      base_policy_codes         = c(1,2,3,90),
+      supplemental_codes        = 26:28,
+      base_anchor               = 25,
+      supplemental_name         = "pace",
       track_base_plan           = TRUE,
       track_base_coverage_level = TRUE,
       split_by_coverage_level   = FALSE)
-    data <- merge(data, pace_data, by = intersect(names(data), names(pace_data)), all = TRUE)
   }
   
   if(any(37 %in% supplemental_codes)){
-    hipwi_data <- get_supplemental_shares(
-      sob_base                  = sob_base,
-      sob_full                  = sob_full,
-      disaggregates             = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code"),
+    res[[length(res)+1]] <- allocate_supplemental_area(
+      sob                       = sob,
+      disaggregates             = disaggregates,
+      base_policy_codes         = c(1,2,3,90),
       supplemental_codes        = 37,
       supplemental_name         = "hipwi",
       track_base_plan           = FALSE,
       track_base_coverage_level = FALSE,
       split_by_coverage_level   = FALSE)
-    data <- merge(data, hipwi_data, by = intersect(names(data), names(hipwi_data)), all = TRUE)
+
   }
   
   if(any(38 %in% supplemental_codes)){
-    fipsi_data <- get_supplemental_shares(
-      sob_base                  = sob_base,
-      sob_full                  = sob_full,
-      disaggregates             = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code"),
+    res[[length(res)+1]] <- allocate_supplemental_area(
+      sob                       = sob,
+      disaggregates             = disaggregates,
+      base_policy_codes         = c(1,2,3,90),
       supplemental_codes        = 38,
       supplemental_name         = "fipsi",
       track_base_plan           = FALSE,
       track_base_coverage_level = FALSE,
       split_by_coverage_level   = FALSE)
-    data <- merge(data, fipsi_data, by = intersect(names(data), names(fipsi_data)), all = TRUE)
   }
   
   if(any(16:17 %in% supplemental_codes)){
-    mp_data <- sob_full[
-      insurance_plan_code %in% 16:17,
-      .(
-        mp_area = sum(insured_acres,   na.rm = TRUE) + sum(endorsed_acres,   na.rm = TRUE)
-      ),
-      by = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code",
-             "unit_structure_code", "insurance_plan_code", "coverage_type_code", "coverage_level_percent")
-    ]
-    mp_data[, insurance_plan_code := insurance_plan_code-14]
-    data <- merge(data, mp_data, by = intersect(names(data), names(mp_data)), all = TRUE)
     
+    res[[length(res)+1]] <- allocate_supplemental_area(
+      sob                       = sob,
+      disaggregates             = disaggregates,
+      base_policy_codes         = c(1,2,3,90,16:17,4:6),
+      supplemental_codes        = 16:17,
+      supplemental_name         = "mp",
+      track_base_plan           = FALSE,
+      track_base_coverage_level = TRUE,
+      split_by_coverage_level   = FALSE)
+
   }
   
   if(any(35:36 %in% supplemental_codes)){
-    stax_data <- sob_full[
-      insurance_plan_code %in% 35:36,
-      .(
-        stax_area = sum(insured_acres,   na.rm = TRUE) + sum(endorsed_acres,   na.rm = TRUE)
-      ),
-      by = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code",
-             "unit_structure_code", "insurance_plan_code", "coverage_type_code", "coverage_level_percent")
-    ]
-    stax_data[, insurance_plan_code := insurance_plan_code-33]
-    data <- merge(data, stax_data, by = intersect(names(data), names(stax_data)), all = TRUE)
+    res[[length(res)+1]] <- allocate_supplemental_area(
+      sob                       = sob,
+      disaggregates             = disaggregates,
+      base_policy_codes         = c(35:36,1:3,90,4:6),
+      supplemental_codes        = 35:36,
+      supplemental_name         = "stax",
+      track_base_plan           = FALSE,
+      track_base_coverage_level = TRUE,
+      split_by_coverage_level   = FALSE)
+
   }
   
-  for (nn in names(data)[grepl("_area|_share",names(data))]) {
-    if (!nn %in% names(data)) next
-    data[!is.finite(get(nn)), (nn) := NA_real_]
-    data[get(nn) < 0, (nn) := 0]
-    data[is.na(get(nn)), (nn) := 0]
-  }
+  res <- data.table::rbindlist(res,fill = TRUE)
   
-  for (nn in names(data)[grepl("_share",names(data))]) {
-    if (!nn %in% names(data)) next
-    data[get(nn) > 1, (nn) := 1]
-  }
-  
-  data <- data[is.finite(insured_acres) & insured_acres > 0]
-  return(data)
+  return(res)
 }
 
 
-#' Compute Supplemental Product Shares Relative to a Base Insured-Acres Denominator
+#' Allocate Supplemental Area and Eligible Acres for a Supplemental Product Stub
 #'
 #' @description
-#' Computes **supplemental adoption measures** by expressing supplemental acres as a
-#' fraction of **base insured acres** from a companion base dataset. This function is a
-#' low-level helper used by `calculate_supplemental_adoption()` to construct product-level
-#' uptake variables such as `sco_share`, `pace_share`, `hipwi_share`, or coverage-specific
-#' measures like `eco90_share` and `eco95_share`.
+#' Aggregates supplemental endorsed acres (\code{supplemental_area}) for selected
+#' \code{supplemental_codes} and aggregates base insured acres (\code{eligible_acres}) for
+#' selected \code{base_policy_codes}, at a common disaggregation grain, returning a long
+#' table keyed by identifiers and a \code{supplemental_plan} label.
+#'
+#' This is a low-level helper used by \code{get_supplemental_area()} and
+#' \code{build_supplemental_adoption_dynamics()} to construct product- and
+#' coverage-specific adoption totals.
 #'
 #' @details
 #' The function implements the following steps:
-#'
 #' \enumerate{
-#'   \item **Supplemental aggregation (numerator):** Filters `sob_full` to
-#'   `supplemental_codes` and aggregates `endorsed_acres` to form
-#'   `supplemental_area` at the requested disaggregation level. Depending on
-#'   user settings, aggregation may additionally track the base plan
-#'   (`insurance_plan_code`) and/or the base coverage level
-#'   (`coverage_level_percent`).
+#'   \item **Supplemental aggregation (numerator):** Filters \code{sob} to
+#'   \code{supplemental_codes} and aggregates \code{endorsed_acres} to form
+#'   \code{supplemental_area} at the requested disaggregation level. Depending on settings,
+#'   aggregation may additionally track the base plan (\code{insurance_plan_code}) and/or the
+#'   base coverage level (\code{coverage_level_percent}).
 #'
-#'   \item **Plan-code anchoring (optional):** If `base_anchor` is supplied,
-#'   `insurance_plan_code` is shifted by subtracting the anchor value. This is
-#'   typically used to map stacked-plan codes back onto their underlying base
-#'   plans (e.g., SCO codes 31-33 -> base plans 1-3 by subtracting 30).
+#'   \item **Plan-code anchoring (optional):** If \code{base_anchor} is supplied,
+#'   \code{insurance_plan_code} is shifted by subtracting the anchor value. This is typically
+#'   used to map stacked-plan codes back onto underlying base plans (e.g., SCO 31-33 -> base
+#'   plans 1-3 by subtracting 30).
 #'
-#'   \item **Base aggregation (denominator):** Aggregates `sob_base` to the
-#'   intersection of keys shared with the supplemental aggregation and computes
-#'   total `insured_acres` for use as the denominator.
+#'   \item **Coverage-specific labeling (optional):** If \code{split_by_coverage_level = TRUE},
+#'   constructs \code{supplemental_plan} labels using \code{coverage_level_percent} (e.g.,
+#'   \code{"eco90"}, \code{"eco95"}) and removes \code{coverage_level_percent} from the
+#'   aggregation grain so coverage becomes encoded in the label rather than the keys.
 #'
-#'   \item **Share construction:** Computes
-#'   \code{supplemental_share = supplemental_area / insured_acres} when
-#'   `insured_acres > 0`; otherwise assigns `NA`.
+#'   \item **Base aggregation (denominator):** Aggregates \code{insured_acres} for
+#'   \code{base_policy_codes} to form \code{eligible_acres} at the same disaggregation grain.
 #'
-#'   \item **De-duplication and reshaping:** If multiple rows exist for the same
-#'   identifier set and coverage label, the function collapses duplicates by
-#'   taking the **mean** share within each identifier group before reshaping to
-#'   wide format.
+#'   \item **Join and bounds:** Inner-joins numerator and denominator on shared identifiers,
+#'   drops rows with \code{eligible_acres == 0}, and enforces \code{supplemental_area <= eligible_acres}.
 #' }
 #'
-#' If `split_by_coverage_level = TRUE`, output columns are labeled by coverage
-#' level percent (rounded) and named
-#' `<supplemental_name><CL>_share` (e.g., `eco90_share`). In this case,
-#' `coverage_level_percent` is removed from merge keys so that shares vary only
-#' along the remaining disaggregation dimensions.
+#' @param sob A \code{data.table} containing the full SOB-TPU extract (base and supplemental
+#' records). Must include \code{endorsed_acres}, \code{insured_acres},
+#' \code{insurance_plan_code}, and the identifier columns referenced in \code{disaggregates}.
 #'
-#' All non-finite share values (NA, Inf, -Inf, NaN) are coerced to **0** in the
-#' final output.
+#' @param base_policy_codes Integer vector of base plan codes defining the denominator
+#' acreage universe used to compute \code{eligible_acres}.
 #'
-#' @param sob_base A `data.table` containing **base-policy outcomes** used as the
-#'   denominator. Must include `insured_acres` and the identifier columns needed
-#'   to form merge keys.
+#' @param supplemental_codes Integer vector of SOB insurance plan codes identifying the
+#' supplemental product(s) whose endorsed acres form \code{supplemental_area}.
 #'
-#' @param sob_full A `data.table` containing the **full SOB-TPU extract**
-#'   (base and supplemental records). Must include `endorsed_acres`,
-#'   `insurance_plan_code`, and the identifier columns referenced in
-#'   `disaggregates`.
+#' @param supplemental_name Character scalar used to construct \code{supplemental_plan} when
+#' \code{split_by_coverage_level = FALSE}.
 #'
-#' @param supplemental_codes Integer vector of SOB insurance plan codes
-#'   identifying the supplemental product(s) whose adoption is to be measured.
+#' @param disaggregates Optional character vector defining the primary aggregation grain.
+#' Defaults to \code{c("commodity_year","state_code","county_code","commodity_code")}.
 #'
-#' @param supplemental_name Character scalar used to construct output column
-#'   names. The suffix `"_share"` is appended internally.
+#' @param base_anchor Optional integer used to re-anchor stacked plan codes to base plan codes.
 #'
-#' @param disaggregates Optional character vector defining the primary
-#'   aggregation grain. Defaults to
-#'   `c("commodity_year","state_code","county_code","commodity_code",
-#'     "type_code","practice_code")`.
+#' @param track_base_plan Logical. If \code{TRUE}, aggregates separately by
+#' \code{insurance_plan_code} (after optional anchoring).
 #'
-#' @param base_anchor Optional integer used to re-anchor stacked plan codes to
-#'   base plan codes.
+#' @param track_base_coverage_level Logical. If \code{TRUE}, aggregates separately by
+#' \code{coverage_level_percent}.
 #'
-#' @param track_base_plan Logical. If `TRUE`, adoption shares are computed
-#'   separately by base insurance plan.
+#' @param split_by_coverage_level Logical. If \code{TRUE}, encode coverage into
+#' \code{supplemental_plan} labels (e.g., \code{"eco90"}) rather than retaining
+#' \code{coverage_level_percent} as a key column.
 #'
-#' @param track_base_coverage_level Logical. If `TRUE`, adoption shares are
-#'   computed separately by base coverage level.
+#' @return A \code{data.table} containing the requested identifiers, \code{supplemental_plan},
+#' and the level variables \code{supplemental_area} and \code{eligible_acres}.
 #'
-#' @param split_by_coverage_level Logical. If `TRUE`, returns separate share
-#'   columns by coverage level percent.
-#'
-#' @return A `data.frame` (resulting from `tidyr` reshaping) containing the
-#'   requested identifiers and one or more wide columns ending in `"_share"`.
 #' @export
-get_supplemental_shares <- function(
-    sob_base,
-    sob_full,
+allocate_supplemental_area <- function(
+    sob,
+    base_policy_codes,
     supplemental_codes,
     supplemental_name,
     disaggregates = NULL,
@@ -549,7 +492,7 @@ get_supplemental_shares <- function(
 ){
   
   if(is.null(disaggregates)){
-    disaggregates = c("commodity_year", "state_code", "county_code", "commodity_code", "type_code", "practice_code")
+    disaggregates = c("commodity_year", "state_code", "county_code", "commodity_code")
   }
   
   # Supplemental acres
@@ -561,7 +504,7 @@ get_supplemental_shares <- function(
     disaggregates_updated <- unique(c(disaggregates_updated,"coverage_level_percent"))
   }
   
-  data <- sob_full[
+  data <- sob[
     insurance_plan_code %in% supplemental_codes,
     .(supplemental_area = sum(endorsed_acres, na.rm = TRUE)),
     by = c(disaggregates_updated)
@@ -571,37 +514,29 @@ get_supplemental_shares <- function(
     data[, insurance_plan_code := insurance_plan_code - base_anchor]
   }
   
-  
   if(split_by_coverage_level){
-    data[, coverage_name := paste0(supplemental_name, round(coverage_level_percent * 100))]
+    data[, supplemental_plan := paste0(supplemental_name, round(coverage_level_percent * 100))]
     disaggregates_updated <- disaggregates_updated[!disaggregates_updated %in% "coverage_level_percent"]
   }else{
-    data[, coverage_name := supplemental_name]
+    data[, supplemental_plan := supplemental_name]
   }
+  data <- data[, .(supplemental_area = sum(supplemental_area, na.rm = TRUE)),
+               by = c(disaggregates_updated, "supplemental_plan")]
   
-  data[, coverage_name := paste0(coverage_name,"_share")]
+  base_data <- sob[
+    insurance_plan_code %in% base_policy_codes,
+    .(eligible_acres = sum(insured_acres, na.rm = TRUE)),
+    by = c(disaggregates_updated)]
   
-  merg_keys <- intersect(names(sob_base),names(data))
-  if(split_by_coverage_level){
-    merg_keys <- merg_keys[!merg_keys %in% "coverage_level_percent"]
-  }
+  data <- data[base_data,on = intersect(names(base_data), names(data)),nomatch = 0]
+  data <- data[!supplemental_plan %in% NA]
+  data[supplemental_area > eligible_acres, supplemental_area:= eligible_acres]
+  data <- data[!eligible_acres %in% 0]
   
-  data <- data[
-    sob_base[, .(insured_acres = sum(insured_acres, na.rm = TRUE)),
-             by = merg_keys],
-    on = merg_keys,
-    nomatch = 0
-  ]
-  
-  data[, supplemental_share := fifelse(insured_acres > 0, supplemental_area/insured_acres, NA_real_)]
-  
-  data <- data[, .(supplemental_share = mean(supplemental_share, na.rm = TRUE)),
-               by = c(disaggregates_updated, "coverage_name")]
-  
-  data <- data |> tidyr::spread(coverage_name, supplemental_share)
-  data <- data |> tidyr::gather(coverage_name, supplemental_share, names(data)[grepl("_share$",names(data))])
-  data$supplemental_share <- ifelse(data$supplemental_share %in% c(NA,Inf,-Inf,NaN),0,data$supplemental_share)
-  data <- data |> tidyr::spread(coverage_name, supplemental_share)
+  # data <- data |> tidyr::spread(supplemental_plan, supplemental_area)
+  # data <- data |> tidyr::gather(supplemental_plan, supplemental_area, names(data)[grepl("_area$",names(data))])
+  # data$supplemental_area <- ifelse(data$supplemental_area %in% c(NA,Inf,-Inf,NaN),0,data$supplemental_area)
+  # data <- data |> tidyr::spread(coverage_name, supplemental_area)
   
   return(data)
 }
